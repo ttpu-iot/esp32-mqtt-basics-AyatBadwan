@@ -2,7 +2,7 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-
+#include <time.h>
 
 // WiFi credentials
 const char* ssid = "Wokwi-GUEST";
@@ -44,6 +44,8 @@ void setup(){
   delay(1000);
   SetUpPinMode();
   SetAllLedsToLow();
+
+  configTime(18000, 0, "pool.ntp.org"); // UTC+5 for Tashkent
 
   // Connect to WiFi
   connectWiFi();

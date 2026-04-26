@@ -38,9 +38,10 @@ PubSubClient mqtt_client(espClient);
 void publishEveryFive();
 void connectMQTT();
 void connectWiFi();
-int checkMQTTconnection();
+void checkMQTTconnection();
 void check_WiFi_connection();
 void SetUpPinMode();
+void sentButtonState(const char* State);
 
 void setup(){
   Serial.begin(9600);
@@ -54,20 +55,50 @@ void setup(){
   // Setup MQTT
   mqtt_client.setServer(mqtt_broker, mqtt_port);
 
+  // Connect to MQTT broker
+  connectMQTT();
 }
 
 
 void loop() {
   check_WiFi_connection();
-  int i = checkMQTTconnection();
+  checkMQTTconnection();
 
   // Process incoming MQTT messages
   mqtt_client.loop();
 
   publishEveryFive();  // Publish message every 5 seconds
 
+  bool lastState = digitalRead(BUTTON);
+  delay(50);
+  bool currentState = digitalRead(BUTTON);
 
+  if (lastState == LOW && currentState == HIGH) {
+    sentButtonState("PRESSED");
+  } 
+  else if (lastState == HIGH && currentState == LOW){
+    sentButtonState("RELEASED");
+  }
 
+}
+
+void sentButtonState(const char* State){
+    JsonDocument state;
+    state["light"] = State;
+    state["timestamp"] = time(nullptr);
+
+    char buffer[256];
+    serializeJson(state, buffer);
+
+    Serial.print("Publishing message: ");
+    Serial.println(buffer);
+    
+    if (mqtt_client.publish(topic_buttom, buffer)) {
+      Serial.println("Message published successfully!");
+    } else {
+      Serial.println("Failed to publish message!");
+    }
+    Serial.println("---");
 }
 
 // Publish message every 5 seconds
@@ -102,15 +133,11 @@ void check_WiFi_connection(){
   }
 }
 
-int checkMQTTconnection(){
-
+void checkMQTTconnection(){
   if (!mqtt_client.connected()) {
     Serial.println("MQTT disconnected! Reconnecting...");
     connectMQTT();
-    return 1;
   }
-
-  return 0;
 }
 
 // Function to connect to WiFi

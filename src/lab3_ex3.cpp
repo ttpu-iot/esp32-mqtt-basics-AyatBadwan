@@ -1,307 +1,340 @@
 #include "Arduino.h"
-#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 #include <time.h>
-
-//lcd part
-#include <Arduino.h>
+#include <LiquidCrystal_I2C.h>
 #include <Wire.h>
-#include <hd44780.h>
-#include <hd44780ioClass/hd44780_I2Cexp.h>
 
-// LCD Configuration
-hd44780_I2Cexp lcd;  // Auto-detect I2C address
-const int LCD_COLS = 16;
-const int LCD_ROWS = 2;
-
-// WiFi credentials
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
-
-// MQTT Broker settings
-const char* mqtt_broker = "mqtt.iotserver.uz";  // Free public MQTT broker
-const int mqtt_port = 1883;
-const char* mqtt_username = "userTTPU";  // username given in the telegram group
-const char* mqtt_password = "mqttpass";  // password given in the telegram group
-
-// global declarations
+// LED Pin definitions
 #define RED_LED 26
 #define GREEN_LED 27
 #define BLUE_LED 14
 #define YELLOW_LED 12
 
-//ex1
-#define BUTTON 25
-const char* topic_buttom = "ttpu/iot/narimon/events/button";
+// Button pin
+#define BUTTON_PIN 25
 
-// topics for subscriber
-const char* RED = "ttpu/iot/narimon/led/red";
-const char* GREEN = "ttpu/iot/narimon/led/green";
-const char* BLUE = "ttpu/iot/narimon/led/blue";
-const char* YELLOW = "ttpu/iot/narimon/led/yellow";
-const char* DISPLAY_TOPIC = "ttpu/iot/narimon/display"; //topic for display massage
+// I2C pins for LCD
+#define I2C_SDA 21
+#define I2C_SCL 22
 
+// LCD address (usually 0x27)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// WiFi credentials (for WOKWI simulation)
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+// MQTT credentials
+const char* mqtt_broker = "mqtt.iotserver.uz";
+const int mqtt_port = 1883;
+const char* mqtt_username = "userTTPU";
+const char* mqtt_password = "mqttpass";
+const char* client_id = "AyatBadwan-lab3-ex3";
+
+// LED topics
+const char* red_topic = "ttpu/iot/AyatBadwan/led/red";
+const char* green_topic = "ttpu/iot/AyatBadwan/led/green";
+const char* blue_topic = "ttpu/iot/AyatBadwan/led/blue";
+const char* yellow_topic = "ttpu/iot/AyatBadwan/led/yellow";
+
+// Button event topic
+const char* button_topic = "ttpu/iot/AyatBadwan/events/button";
+
+// Display topic
+const char* display_topic = "ttpu/iot/AyatBadwan/display";
+
+// Button debouncing variables
+int lastButtonState = LOW;
+int currentButtonState = LOW;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+// LCD display variables
+String lastDisplayText = "";
+bool lcdInitialized = false;
+
+// MQTT client
 WiFiClient espClient;
-PubSubClient mqtt_client(espClient);
+PubSubClient mqttClient(espClient);
 
-// functions
-void mqttCallback(char* topic, byte* payload, unsigned int length);
-String parserForLeds(byte* payload, unsigned int length);
-void parseMassageDisplay(byte* payload, unsigned int length);
-void connectMQTT();
-void connectWiFi();
-void checkMQTTconnection();
-void check_WiFi_connection();
-void SetUpPinMode();
-void SetAllLedsToLow();
-void subscribeToTopics();
-void pubButton();
+void setup_wifi() {
+    Serial.print("Connecting to WiFi");
+    WiFi.begin(ssid, password);
+    
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    
+    Serial.println();
+    Serial.println("WiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+}
 
-void setup(){
-  Serial.begin(9600);
-  delay(1000);
-  SetUpPinMode();
-  SetAllLedsToLow();
+void setup_time() {
+    Serial.print("Syncing NTP time for Tashkent (UTC+5)...");
+    configTime(18000, 0, "pool.ntp.org", "time.nist.gov");
+    
+    struct tm timeinfo;
+    int attempts = 0;
+    while (!getLocalTime(&timeinfo) && attempts < 10) {
+        delay(1000);
+        attempts++;
+        Serial.print(".");
+    }
+    
+    if (attempts < 10) {
+        Serial.println(" DONE!");
+        char buffer[30];
+        strftime(buffer, sizeof(buffer), "%d/%m %H:%M:%S", &timeinfo);
+        Serial.print("Current Tashkent time: ");
+        Serial.println(buffer);
+    } else {
+        Serial.println(" FAILED!");
+    }
+}
 
-  configTime(18000, 0, "pool.ntp.org"); // UTC+5 for Tashkent
+String get_formatted_time() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "00/00 00:00:00";
+    }
+    
+    char buffer[20];
+    strftime(buffer, sizeof(buffer), "%d/%m %H:%M:%S", &timeinfo);
+    return String(buffer);
+}
 
-  // Initialize LCD
-  int status = lcd.begin(LCD_COLS, LCD_ROWS);
-  if (status) {
-    Serial.println("LCD initialization failed!");
-    Serial.print("Status code: ");
-    Serial.println(status);
-    hd44780::fatalError(status);
-  }
+void update_lcd(String message) {
+    // Truncate to 16 characters if needed
+    if (message.length() > 16) {
+        message = message.substring(0, 16);
+    }
+    
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(message);
+    
+    lcd.setCursor(0, 1);
+    String timeStr = get_formatted_time();
+    lcd.print(timeStr);
+    
+    Serial.print("[LCD] Updated - Line 1: ");
+    Serial.print(message);
+    Serial.print(" | Line 2: ");
+    Serial.println(timeStr);
+}
 
-  lcd.clear();
+void callback(char* topic, byte* payload, unsigned int length) {
+    // Convert payload to string
+    String message;
+    for (unsigned int i = 0; i < length; i++) {
+        message += (char)payload[i];
+    }
+    
+    Serial.print("[MQTT] Received on ");
+    Serial.print(topic);
+    Serial.print(": ");
+    Serial.println(message);
+    
+    // Parse JSON
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, message);
+    
+    if (error) {
+        Serial.print("[ERROR] JSON parsing failed: ");
+        Serial.println(error.c_str());
+        return;
+    }
+    
+    // Handle LED control
+    if (strcmp(topic, red_topic) == 0) {
+        const char* state = doc["state"];
+        if (state && strcmp(state, "ON") == 0) {
+            digitalWrite(RED_LED, HIGH);
+            Serial.println("[LED] Red LED -> ON");
+        } else if (state && strcmp(state, "OFF") == 0) {
+            digitalWrite(RED_LED, LOW);
+            Serial.println("[LED] Red LED -> OFF");
+        }
+    }
+    else if (strcmp(topic, green_topic) == 0) {
+        const char* state = doc["state"];
+        if (state && strcmp(state, "ON") == 0) {
+            digitalWrite(GREEN_LED, HIGH);
+            Serial.println("[LED] Green LED -> ON");
+        } else if (state && strcmp(state, "OFF") == 0) {
+            digitalWrite(GREEN_LED, LOW);
+            Serial.println("[LED] Green LED -> OFF");
+        }
+    }
+    else if (strcmp(topic, blue_topic) == 0) {
+        const char* state = doc["state"];
+        if (state && strcmp(state, "ON") == 0) {
+            digitalWrite(BLUE_LED, HIGH);
+            Serial.println("[LED] Blue LED -> ON");
+        } else if (state && strcmp(state, "OFF") == 0) {
+            digitalWrite(BLUE_LED, LOW);
+            Serial.println("[LED] Blue LED -> OFF");
+        }
+    }
+    else if (strcmp(topic, yellow_topic) == 0) {
+        const char* state = doc["state"];
+        if (state && strcmp(state, "ON") == 0) {
+            digitalWrite(YELLOW_LED, HIGH);
+            Serial.println("[LED] Yellow LED -> ON");
+        } else if (state && strcmp(state, "OFF") == 0) {
+            digitalWrite(YELLOW_LED, LOW);
+            Serial.println("[LED] Yellow LED -> OFF");
+        }
+    }
+    // Handle display messages
+    else if (strcmp(topic, display_topic) == 0) {
+        const char* text = doc["text"];
+        if (text) {
+            lastDisplayText = String(text);
+            update_lcd(lastDisplayText);
+            Serial.println("[LCD] Display message processed");
+        } else {
+            Serial.println("[ERROR] Missing 'text' field in display message");
+        }
+    }
+}
 
-  // Connect to WiFi
-  connectWiFi();
-  
-  // Setup MQTT
-  mqtt_client.setServer(mqtt_broker, mqtt_port);
-  mqtt_client.setCallback(mqttCallback);
+void reconnect_mqtt() {
+    while (!mqttClient.connected()) {
+        Serial.print("Connecting to MQTT broker...");
+        
+        if (mqttClient.connect(client_id, mqtt_username, mqtt_password)) {
+            Serial.println(" connected!");
+            
+            // Subscribe to all topics
+            mqttClient.subscribe(red_topic);
+            mqttClient.subscribe(green_topic);
+            mqttClient.subscribe(blue_topic);
+            mqttClient.subscribe(yellow_topic);
+            mqttClient.subscribe(display_topic);
+            
+            Serial.println("[MQTT] Subscribed to topics:");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/red");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/green");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/blue");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/yellow");
+            Serial.println("  - ttpu/iot/AyatBadwan/display");
+        } else {
+            Serial.print(" failed, rc=");
+            Serial.print(mqttClient.state());
+            Serial.println(" retrying in 5 seconds");
+            delay(5000);
+        }
+    }
+}
 
-  // Connect to MQTT broker
-  connectMQTT();
+void setup() {
+    Serial.begin(115200);
+    Serial.println();
+    Serial.println("========================================");
+    Serial.println("ESP32 MQTT Exercise 3 Starting...");
+    Serial.println("Bi-directional MQTT + LCD Display");
+    Serial.println("========================================");
+    
+    // Initialize LED pins
+    pinMode(RED_LED, OUTPUT);
+    pinMode(GREEN_LED, OUTPUT);
+    pinMode(BLUE_LED, OUTPUT);
+    pinMode(YELLOW_LED, OUTPUT);
+    
+    // Initialize button
+    pinMode(BUTTON_PIN, INPUT_PULLDOWN);
+    
+    // Turn all LEDs OFF initially
+    digitalWrite(RED_LED, LOW);
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(BLUE_LED, LOW);
+    digitalWrite(YELLOW_LED, LOW);
+    
+    Serial.println("[SETUP] LEDs initialized (all OFF)");
+    Serial.println("[SETUP] Button initialized on D25");
+    
+    // Initialize LCD
+    Wire.begin(I2C_SDA, I2C_SCL);
+    lcd.init();
+    lcd.backlight();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Starting...");
+    lcd.setCursor(0, 1);
+    lcd.print("ESP32 MQTT Lab");
+    Serial.println("[SETUP] LCD initialized");
+    
+    // Setup WiFi
+    setup_wifi();
+    
+    // Setup NTP time
+    setup_time();
+    
+    // Setup MQTT
+    mqttClient.setServer(mqtt_broker, mqtt_port);
+    mqttClient.setCallback(callback);
+    
+    // Update LCD with ready message
+    delay(2000);
+    update_lcd("ESP32 Ready!");
 }
 
 void loop() {
-  check_WiFi_connection();
-  checkMQTTconnection();
-
-  // Process incoming MQTT messages
-  mqtt_client.loop();
-
-  //ex1
-  pubButton();
-
-}
-
-// Callback function for received MQTT messages
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // 1. Print the prefix and topic
-  Serial.println();
-  Serial.print("[MQTT] Received on ");
-  Serial.print(topic);
-  Serial.print(": ");
-
-  // 2. Print the entire payload without a loop
-  Serial.write(payload, length); 
-  Serial.println(); // Just to start a new line
-
-  // 3. Route the topic to the correct Pin
-  // strcmp returns 0 if the strings match perfectly
-  if (!strcmp(topic, RED)) {
-    String state = parserForLeds(payload, length);
-    // Convert state to a simple boolean for the switch
-    bool power = (state == "ON");
-
-    digitalWrite(RED_LED, power);
-    Serial.print("[LED] Red LED ->");
-    Serial.println(state);
-  } 
-  else if (!strcmp(topic, GREEN)) {
-    String state = parserForLeds(payload, length);
-    // Convert state to a simple boolean for the switch
-    bool power = (state == "ON");
-    digitalWrite(GREEN_LED, power);
-    Serial.print("[LED] Green LED ->");
-    Serial.println(state);   
-  } 
-  else if (!strcmp(topic, BLUE)) {
-    String state = parserForLeds(payload, length);
-    // Convert state to a simple boolean for the switch
-    bool power = (state == "ON");
-    digitalWrite(BLUE_LED, power);
-    Serial.print("[LED] Blue LED ->");
-    Serial.println(state);       
-  } 
-  else if (!strcmp(topic, YELLOW)) {
-    String state = parserForLeds(payload, length);
-    // Convert state to a simple boolean for the switch
-    bool power = (state == "ON");
-    digitalWrite(YELLOW_LED, power);
-    Serial.print("[LED] Yellow LED ->");
-    Serial.println(state); 
-  }
-  else if (!strcmp(topic, DISPLAY_TOPIC)) {       //displaying massage
-    lcd.clear();
-    parseMassageDisplay(payload, length);
-    
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
-      char buffer[20];
-      strftime(buffer, sizeof(buffer), "%d/%m %H:%M:%S", &timeinfo);
-      // Display on LCD Line 2
-      lcd.setCursor(0, 1);
-      lcd.print(buffer);
+    if (!mqttClient.connected()) {
+        reconnect_mqtt();
     }
-  }
-  
-}
-
-String parserForLeds(byte* payload, unsigned int length){
-  JsonDocument doc;
-  deserializeJson(doc, payload, length);
-  String state = doc["state"];
-
-  return state;
-}
-
-void parseMassageDisplay(byte* payload, unsigned int length){
-  JsonDocument text;
-  deserializeJson(text, payload, length);
-  String massage = text["text"];
-
-  lcd.setCursor(0, 0);
-  lcd.print(massage);
-}
-
-void check_WiFi_connection(){
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected! Reconnecting...");
-    connectWiFi();
-  }
-}
-
-void checkMQTTconnection(){
-  if (!mqtt_client.connected()) {
-    Serial.println("MQTT disconnected! Reconnecting...");
-    connectMQTT();
-  }
-}
-
-// Function to connect to WiFi
-void connectWiFi() {
-  Serial.println("\nConnecting to WiFi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  Serial.println("\nWiFi connected!");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-// Function to connect/reconnect to MQTT broker
-void connectMQTT() {
-  while (!mqtt_client.connected()) {
-    Serial.println("Connecting to MQTT broker...");
+    mqttClient.loop();
     
-    String client_id = "esp32-client-" + String(WiFi.macAddress());
+    unsigned long currentMillis = millis();
     
-    if (mqtt_client.connect(client_id.c_str(), mqtt_username, mqtt_password)) {
-      Serial.println("Connected to MQTT broker!");
-      subscribeToTopics();
-    } else {
-      Serial.print("MQTT connection failed, rc=");
-      Serial.println(mqtt_client.state());
-      Serial.println("Retrying in 5 seconds...");
-      delay(5000);
+    // Publish button events on state change
+    int reading = digitalRead(BUTTON_PIN);
+    
+    if (reading != lastButtonState) {
+        lastDebounceTime = currentMillis;
     }
-  }
-}
-
-void SetUpPinMode(){
-  pinMode(RED_LED, OUTPUT);
-  pinMode(GREEN_LED, OUTPUT);
-  pinMode(BLUE_LED, OUTPUT);
-  pinMode(YELLOW_LED, OUTPUT);
-
-  pinMode(BUTTON, INPUT);
-}
-
-void SetAllLedsToLow(){
-  // Initialize all LEDs to LOW (Off)
-  digitalWrite(RED_LED, LOW);
-  digitalWrite(GREEN_LED, LOW);
-  digitalWrite(BLUE_LED, LOW);
-  digitalWrite(YELLOW_LED, LOW);
-}
-
-void subscribeToTopics(){
-  // Subscribe to topic
-  mqtt_client.subscribe(RED);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(RED);
-
-    // Subscribe to topic
-  mqtt_client.subscribe(GREEN);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(GREEN);
-
-  // Subscribe to topic
-  mqtt_client.subscribe(BLUE);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(BLUE);
-
-  // Subscribe to topic
-  mqtt_client.subscribe(YELLOW);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(YELLOW);
-
-  // Subscribe to topic
-  mqtt_client.subscribe(DISPLAY_TOPIC);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(DISPLAY_TOPIC);
-}
-
-//ex1
-void sentButtonState(const char* State){
-    JsonDocument state;
-    state["light"] = State;
-    state["timestamp"] = time(nullptr);
-
-    char buffer[256];
-    serializeJson(state, buffer);
-
-    Serial.print("Publishing message: ");
-    Serial.println(buffer);
     
-    if (mqtt_client.publish(topic_buttom, buffer)) {
-      Serial.println("Message published successfully!");
-    } else {
-      Serial.println("Failed to publish message!");
+    if ((currentMillis - lastDebounceTime) > debounceDelay) {
+        if (reading != currentButtonState) {
+            currentButtonState = reading;
+            
+            // Button state changed - publish event
+            const char* event = (currentButtonState == HIGH) ? "PRESSED" : "RELEASED";
+            
+            // Get current timestamp
+            time_t now = time(nullptr);
+            
+            // Create JSON payload
+            JsonDocument doc;
+            doc["event"] = event;
+            doc["timestamp"] = now;
+            
+            char buffer[256];
+            serializeJson(doc, buffer);
+            
+            // Publish to MQTT
+            boolean success = mqttClient.publish(button_topic, buffer);
+            
+            // Print to Serial Monitor
+            Serial.println();
+            Serial.print("[PUBLISH] Topic: ");
+            Serial.println(button_topic);
+            Serial.print("          Payload: ");
+            Serial.println(buffer);
+            if (success) {
+                Serial.println("          Status: ✓ Published successfully");
+            } else {
+                Serial.println("          Status: ✗ Publish failed");
+            }
+        }
     }
-    Serial.println("---");
-}
-
-void pubButton(){
-  bool lastState = digitalRead(BUTTON);
-  delay(50);
-  bool currentState = digitalRead(BUTTON);
-
-  if (lastState == LOW && currentState == HIGH) {
-    sentButtonState("PRESSED");
-  } 
-  else if (lastState == HIGH && currentState == LOW){
-    sentButtonState("RELEASED");
-  }
+    lastButtonState = reading;
+    
+    delay(10);
 }

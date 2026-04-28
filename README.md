@@ -1,5 +1,9 @@
 # IoT 2025 - Lab 3 Template
 
+# Screeenshots
+
+![alt text](image.png)
+
 # Lab 3 - ESP32 + MQTT + ArduinoJson
 
 You need to finish following exercises

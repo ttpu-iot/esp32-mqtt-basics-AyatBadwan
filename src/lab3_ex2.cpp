@@ -1,198 +1,192 @@
 #include "Arduino.h"
-#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <time.h>
+#include <ArduinoJson.h>
 
-// WiFi credentials
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
-
-// MQTT Broker settings
-const char* mqtt_broker = "mqtt.iotserver.uz";  // Free public MQTT broker
-const int mqtt_port = 1883;
-const char* mqtt_username = "userTTPU";  // username given in the telegram group
-const char* mqtt_password = "mqttpass";  // password given in the telegram group
-
-// global declarations
+// LED Pin definitions
 #define RED_LED 26
 #define GREEN_LED 27
 #define BLUE_LED 14
 #define YELLOW_LED 12
 
-// topics for subscriber
-const char* RED = "ttpu/iot/narimon/led/red";
-const char* GREEN = "ttpu/iot/narimon/led/green";
-const char* BLUE = "ttpu/iot/narimon/led/blue";
-const char* YELLOW = "ttpu/iot/narimon/led/yellow";
+// WiFi credentials (for WOKWI simulation)
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
 
+// MQTT credentials
+const char* mqtt_broker = "mqtt.iotserver.uz";
+const int mqtt_port = 1883;
+const char* mqtt_username = "userTTPU";
+const char* mqtt_password = "mqttpass";
+const char* client_id = "AyatBadwan-lab3-ex2";
+
+// LED topics
+const char* red_topic = "ttpu/iot/AyatBadwan/led/red";
+const char* green_topic = "ttpu/iot/AyatBadwan/led/green";
+const char* blue_topic = "ttpu/iot/AyatBadwan/led/blue";
+const char* yellow_topic = "ttpu/iot/AyatBadwan/led/yellow";
+
+// MQTT client
 WiFiClient espClient;
-PubSubClient mqtt_client(espClient);
+PubSubClient mqttClient(espClient);
 
-// functions
-void mqttCallback(char* topic, byte* payload, unsigned int length);
-void connectMQTT();
-void connectWiFi();
-void checkMQTTconnection();
-void check_WiFi_connection();
-void SetUpPinMode();
-void SetAllLedsToLow();
-void subscribeToTopics();
+void setup_wifi() {
+    Serial.print("Connecting to WiFi");
+    WiFi.begin(ssid, password);
+    
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    
+    Serial.println();
+    Serial.println("WiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+}
 
-void setup(){
-  Serial.begin(9600);
-  delay(1000);
-  SetUpPinMode();
-  SetAllLedsToLow();
+void callback(char* topic, byte* payload, unsigned int length) {
+    // Convert payload to string
+    String message;
+    for (unsigned int i = 0; i < length; i++) {
+        message += (char)payload[i];
+    }
+    
+    Serial.print("[MQTT] Received on ");
+    Serial.print(topic);
+    Serial.print(": ");
+    Serial.println(message);
+    
+    // Parse JSON
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, message);
+    
+    if (error) {
+        Serial.print("[ERROR] JSON parsing failed: ");
+        Serial.println(error.c_str());
+        return;
+    }
+    
+    // Extract state field
+    const char* state = doc["state"];
+    
+    if (state == nullptr) {
+        Serial.println("[ERROR] Missing 'state' field in JSON");
+        return;
+    }
+    
+    // Determine which LED to control based on topic
+    if (strcmp(topic, red_topic) == 0) {
+        if (strcmp(state, "ON") == 0) {
+            digitalWrite(RED_LED, HIGH);
+            Serial.println("[LED] Red LED -> ON");
+        } else if (strcmp(state, "OFF") == 0) {
+            digitalWrite(RED_LED, LOW);
+            Serial.println("[LED] Red LED -> OFF");
+        } else {
+            Serial.print("[ERROR] Invalid state: ");
+            Serial.println(state);
+        }
+    }
+    else if (strcmp(topic, green_topic) == 0) {
+        if (strcmp(state, "ON") == 0) {
+            digitalWrite(GREEN_LED, HIGH);
+            Serial.println("[LED] Green LED -> ON");
+        } else if (strcmp(state, "OFF") == 0) {
+            digitalWrite(GREEN_LED, LOW);
+            Serial.println("[LED] Green LED -> OFF");
+        } else {
+            Serial.print("[ERROR] Invalid state: ");
+            Serial.println(state);
+        }
+    }
+    else if (strcmp(topic, blue_topic) == 0) {
+        if (strcmp(state, "ON") == 0) {
+            digitalWrite(BLUE_LED, HIGH);
+            Serial.println("[LED] Blue LED -> ON");
+        } else if (strcmp(state, "OFF") == 0) {
+            digitalWrite(BLUE_LED, LOW);
+            Serial.println("[LED] Blue LED -> OFF");
+        } else {
+            Serial.print("[ERROR] Invalid state: ");
+            Serial.println(state);
+        }
+    }
+    else if (strcmp(topic, yellow_topic) == 0) {
+        if (strcmp(state, "ON") == 0) {
+            digitalWrite(YELLOW_LED, HIGH);
+            Serial.println("[LED] Yellow LED -> ON");
+        } else if (strcmp(state, "OFF") == 0) {
+            digitalWrite(YELLOW_LED, LOW);
+            Serial.println("[LED] Yellow LED -> OFF");
+        } else {
+            Serial.print("[ERROR] Invalid state: ");
+            Serial.println(state);
+        }
+    }
+}
 
-  configTime(18000, 0, "pool.ntp.org"); // UTC+5 for Tashkent
+void reconnect_mqtt() {
+    while (!mqttClient.connected()) {
+        Serial.print("Connecting to MQTT broker...");
+        
+        if (mqttClient.connect(client_id, mqtt_username, mqtt_password)) {
+            Serial.println(" connected!");
+            
+            // Subscribe to all 4 LED topics
+            mqttClient.subscribe(red_topic);
+            mqttClient.subscribe(green_topic);
+            mqttClient.subscribe(blue_topic);
+            mqttClient.subscribe(yellow_topic);
+            
+            Serial.println("[MQTT] Subscribed to all LED topics:");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/red");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/green");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/blue");
+            Serial.println("  - ttpu/iot/AyatBadwan/led/yellow");
+        } else {
+            Serial.print(" failed, rc=");
+            Serial.print(mqttClient.state());
+            Serial.println(" retrying in 5 seconds");
+            delay(5000);
+        }
+    }
+}
 
-  // Connect to WiFi
-  connectWiFi();
-  
-  // Setup MQTT
-  mqtt_client.setServer(mqtt_broker, mqtt_port);
-  mqtt_client.setCallback(mqttCallback);
-
-  // Connect to MQTT broker
-  connectMQTT();
+void setup() {
+    Serial.begin(115200);
+    Serial.println();
+    Serial.println("ESP32 MQTT Exercise 2 Starting...");
+    Serial.println("MQTT Subscribe & Control LEDs");
+    Serial.println("----------------------------------------");
+    
+    // Initialize LED pins
+    pinMode(RED_LED, OUTPUT);
+    pinMode(GREEN_LED, OUTPUT);
+    pinMode(BLUE_LED, OUTPUT);
+    pinMode(YELLOW_LED, OUTPUT);
+    
+    // Turn all LEDs OFF initially
+    digitalWrite(RED_LED, LOW);
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(BLUE_LED, LOW);
+    digitalWrite(YELLOW_LED, LOW);
+    
+    Serial.println("[SETUP] LEDs initialized (all OFF)");
+    
+    // Setup WiFi
+    setup_wifi();
+    
+    // Setup MQTT
+    mqttClient.setServer(mqtt_broker, mqtt_port);
+    mqttClient.setCallback(callback);
 }
 
 void loop() {
-  check_WiFi_connection();
-  checkMQTTconnection();
-
-  // Process incoming MQTT messages
-  mqtt_client.loop();
-
-}
-
-// Callback function for received MQTT messages
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // 1. Print the prefix and topic
-  Serial.println();
-  Serial.print("[MQTT] Received on ");
-  Serial.print(topic);
-  Serial.print(": ");
-
-  // 2. Print the entire payload without a loop
-  Serial.write(payload, length); 
-  Serial.println(); // Just to start a new line
-
-  JsonDocument doc;
-  deserializeJson(doc, payload, length);
-  String state = doc["state"];
-
-  // Convert state to a simple boolean for the switch
-  bool power = (state == "ON");
-
-  // 3. Route the topic to the correct Pin
-  // strcmp returns 0 if the strings match perfectly
-  if (!strcmp(topic, RED)) {
-    digitalWrite(RED_LED, power);
-    Serial.print("[LED] Red LED ->");
-    Serial.println(state);
-  } 
-  else if (!strcmp(topic, GREEN)) {
-    digitalWrite(GREEN_LED, power);
-    Serial.print("[LED] Green LED ->");
-    Serial.println(state);   
-  } 
-  else if (!strcmp(topic, BLUE)) {
-    digitalWrite(BLUE_LED, power);
-    Serial.print("[LED] Blue LED ->");
-    Serial.println(state);       
-  } 
-  else if (!strcmp(topic, YELLOW)) {
-    digitalWrite(YELLOW_LED, power);
-    Serial.print("[LED] Yellow LED ->");
-    Serial.println(state); 
-  }
-  
-}
-
-void check_WiFi_connection(){
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected! Reconnecting...");
-    connectWiFi();
-  }
-}
-
-void checkMQTTconnection(){
-  if (!mqtt_client.connected()) {
-    Serial.println("MQTT disconnected! Reconnecting...");
-    connectMQTT();
-  }
-}
-
-// Function to connect to WiFi
-void connectWiFi() {
-  Serial.println("\nConnecting to WiFi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  Serial.println("\nWiFi connected!");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-// Function to connect/reconnect to MQTT broker
-void connectMQTT() {
-  while (!mqtt_client.connected()) {
-    Serial.println("Connecting to MQTT broker...");
-    
-    String client_id = "esp32-client-" + String(WiFi.macAddress());
-    
-    if (mqtt_client.connect(client_id.c_str(), mqtt_username, mqtt_password)) {
-      Serial.println("Connected to MQTT broker!");
-      subscribeToTopics();
-    } else {
-      Serial.print("MQTT connection failed, rc=");
-      Serial.println(mqtt_client.state());
-      Serial.println("Retrying in 5 seconds...");
-      delay(5000);
+    if (!mqttClient.connected()) {
+        reconnect_mqtt();
     }
-  }
-}
-
-void SetUpPinMode(){
-  pinMode(RED_LED, OUTPUT);
-  pinMode(GREEN_LED, OUTPUT);
-  pinMode(BLUE_LED, OUTPUT);
-  pinMode(YELLOW_LED, OUTPUT);
-}
-
-void SetAllLedsToLow(){
-  // Initialize all LEDs to LOW (Off)
-  digitalWrite(RED_LED, LOW);
-  digitalWrite(GREEN_LED, LOW);
-  digitalWrite(BLUE_LED, LOW);
-  digitalWrite(YELLOW_LED, LOW);
-}
-
-void subscribeToTopics(){
-  // Subscribe to topic
-  mqtt_client.subscribe(RED);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(RED);
-
-    // Subscribe to topic
-  mqtt_client.subscribe(GREEN);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(GREEN);
-
-  // Subscribe to topic
-  mqtt_client.subscribe(BLUE);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(BLUE);
-
-  // Subscribe to topic
-  mqtt_client.subscribe(YELLOW);
-  Serial.print("Subscribed to topic: ");
-  Serial.println(YELLOW);
+    mqttClient.loop();
+    
+    delay(10);
 }
